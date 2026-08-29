@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kanban Board</title>
+<style>
+  :root { --bg:#0f1220; --col:#1a1e33; --card:#252b47; --border:#343b61; --text:#e8eaf6; --muted:#9aa3c7; --accent:#5b7cfa; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: var(--muted); margin-bottom: 20px; font-size: .9rem; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  button { background: var(--accent); color: #fff; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  button.secondary { background: var(--col); border: 1px solid var(--border); color: var(--text); font-weight: 400; }
+  button:hover { filter: brightness(1.15); }
+  .board { display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; padding-bottom: 12px; }
+  .column { background: var(--col); border: 1px solid var(--border); border-radius: 10px; min-width: 270px; width: 270px; padding: 12px; flex-shrink: 0; }
+  .column.dragover { outline: 2px dashed var(--accent); }
+  .col-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .col-head h2 { font-size: .95rem; flex: 1; }
+  .col-head .count { color: var(--muted); font-size: .8rem; }
+  .col-head .del-col { background: none; border: none; color: var(--muted); cursor: pointer; padding: 2px 6px; }
+  .col-head .del-col:hover { color: #ff6b81; }
+  .cards { min-height: 24px; display: flex; flex-direction: column; gap: 8px; }
+  .kcard { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; cursor: grab; word-break: break-word; }
+  .kcard.dragging { opacity: .4; }
+  .kcard .actions { margin-top: 6px; display: flex; gap: 8px; }
+  .kcard .actions button { background: none; border: none; color: var(--muted); font-size: .78rem; padding: 0; font-weight: 400; }
+  .kcard .actions button:hover { color: var(--text); }
+  .add-card { margin-top: 10px; width: 100%; background: none; border: 1px dashed var(--border); color: var(--muted); font-weight: 400; }
+  .add-card:hover { color: var(--text); border-color: var(--accent); }
+</style>
+</head>
+<body>
+  <h1>Kanban Board</h1>
+  <p class="sub">Karten per Drag &amp; Drop zwischen Spalten verschieben – alles bleibt lokal gespeichert.</p>
+
+  <div class="toolbar">
+    <button id="addColBtn">+ Spalte</button>
+    <button class="secondary" id="exportBtn">Export JSON</button>
+    <button class="secondary" id="importBtn">Import JSON</button>
+    <input type="file" id="importFile" accept=".json" hidden>
+  </div>
+
+  <div class="board" id="board"></div>
+
+<script>
+"use strict";
+const STORAGE_KEY = "kanban-board-v1";
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+let state = load();
+
+function defaultState() {
+  return { columns: [
+    { id: uid(), name: "Todo", cards: [{ id: uid(), text: "Erste Karte – doppelklicken oder „Bearbeiten“" }] },
+    { id: uid(), name: "Doing", cards: [] },
+    { id: uid(), name: "Done", cards: [] },
+  ]};
+}
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p && Array.isArray(p.columns)) return p;
+    }
+  } catch (e) { /* ignorieren */ }
+  return defaultState();
+}
+
+function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+function findCard(cardId) {
+  for (const col of state.columns) {
+    const idx = col.cards.findIndex(c => c.id === cardId);
+    if (idx !== -1) return { col, idx };
+  }
+  return null;
+}
+
+// --- Render ---
+function render() {
+  const board = document.getElementById("board");
+  board.innerHTML = "";
+  for (const col of state.columns) {
+    const colEl = document.createElement("div");
+    colEl.className = "column";
+    colEl.dataset.colId = col.id;
+    colEl.innerHTML = `
+      <div class="col-head">
+        <h2></h2><span class="count">${col.cards.length}</span>
+        <button class="del-col" title="Spalte löschen">✕</button>
+      </div>
+      <div class="cards"></div>
+      <button class="add-card">+ Karte</button>`;
+    colEl.querySelector("h2").textContent = col.name;
+
+    colEl.querySelector(".del-col").addEventListener("click", () => {
+      if (col.cards.length > 0 && !confirm(`Spalte „${col.name}“ mit ${col.cards.length} Karte(n) löschen?`)) return;
+      state.columns = state.columns.filter(c => c.id !== col.id);
+      save(); render();
+    });
+
+    colEl.querySelector(".add-card").addEventListener("click", () => {
+      const text = prompt("Karten-Text:");
+      if (!text || !text.trim()) return;
+      col.cards.push({ id: uid(), text: text.trim() });
+      save(); render();
+    });
+
+    // Drop auf Spalte (ans Ende)
+    colEl.addEventListener("dragover", e => { e.preventDefault(); colEl.classList.add("dragover"); });
+    colEl.addEventListener("dragleave", () => colEl.classList.remove("dragover"));
+    colEl.addEventListener("drop", e => {
+      e.preventDefault();
+      colEl.classList.remove("dragover");
+      const cardId = e.dataTransfer.getData("text/plain");
+      moveCard(cardId, col.id, null);
+    });
+
+    const cardsEl = colEl.querySelector(".cards");
+    for (const card of col.cards) {
+      cardsEl.appendChild(renderCard(card, col));
+    }
+    board.appendChild(colEl);
+  }
+}
+
+function renderCard(card, col) {
+  const el = document.createElement("div");
+  el.className = "kcard";
+  el.draggable = true;
+  el.dataset.cardId = card.id;
+  el.innerHTML = `<div class="text"></div>
+    <div class="actions"><button class="edit">Bearbeiten</button><button class="del">Löschen</button></div>`;
+  el.querySelector(".text").textContent = card.text;
+
+  el.addEventListener("dragstart", e => {
+    e.dataTransfer.setData("text/plain", card.id);
+    el.classList.add("dragging");
+  });
+  el.addEventListener("dragend", () => el.classList.remove("dragging"));
+
+  // Drop VOR diese Karte (Reihenfolge innerhalb/zwischen Spalten)
+  el.addEventListener("dragover", e => { e.preventDefault(); e.stopPropagation(); });
+  el.addEventListener("drop", e => {
+    e.preventDefault(); e.stopPropagation();
+    const draggedId = e.dataTransfer.getData("text/plain");
+    if (draggedId === card.id) return;
+    moveCard(draggedId, col.id, card.id);
+  });
+
+  const edit = () => {
+    const text = prompt("Karten-Text bearbeiten:", card.text);
+    if (text === null || !text.trim()) return;
+    card.text = text.trim();
+    save(); render();
+  };
+  el.querySelector(".edit").addEventListener("click", edit);
+  el.addEventListener("dblclick", edit);
+  el.querySelector(".del").addEventListener("click", () => {
+    state.columns.forEach(c => c.cards = c.cards.filter(x => x.id !== card.id));
+    save(); render();
+  });
+  return el;
+}
+
+// Karte in Zielspalte verschieben; beforeCardId = null → ans Ende
+function moveCard(cardId, targetColId, beforeCardId) {
+  const found = findCard(cardId);
+  const target = state.columns.find(c => c.id === targetColId);
+  if (!found || !target) return;
+  const [card] = found.col.cards.splice(found.idx, 1);
+  if (beforeCardId) {
+    const idx = target.cards.findIndex(c => c.id === beforeCardId);
+    target.cards.splice(idx === -1 ? target.cards.length : idx, 0, card);
+  } else {
+    target.cards.push(card);
+  }
+  save(); render();
+}
+
+// --- Toolbar ---
+document.getElementById("addColBtn").addEventListener("click", () => {
+  const name = prompt("Name der neuen Spalte:");
+  if (!name || !name.trim()) return;
+  state.columns.push({ id: uid(), name: name.trim(), cards: [] });
+  save(); render();
+});
+
+document.getElementById("exportBtn").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "kanban-export.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+document.getElementById("importBtn").addEventListener("click", () => document.getElementById("importFile").click());
+document.getElementById("importFile").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!data || !Array.isArray(data.columns)) throw new Error("Ungültiges Format");
+      state = data;
+      save(); render();
+    } catch (err) { alert("Import fehlgeschlagen: " + err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = "";
+});
+
+render();
+</script>
+</body>
+</html>
