@@ -53,6 +53,23 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 let state = load();
 
+// Strukturelle Validierung: erwartet { columns: [{ id, name, cards: [{ id, text }] }] }
+function isValidState(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  if (!Array.isArray(data.columns)) return false;
+  return data.columns.every(col =>
+    col && typeof col === "object" && !Array.isArray(col) &&
+    typeof col.id === "string" && col.id.length > 0 &&
+    typeof col.name === "string" &&
+    Array.isArray(col.cards) &&
+    col.cards.every(card =>
+      card && typeof card === "object" && !Array.isArray(card) &&
+      typeof card.id === "string" && card.id.length > 0 &&
+      typeof card.text === "string"
+    )
+  );
+}
+
 function defaultState() {
   return { columns: [
     { id: uid(), name: "Todo", cards: [{ id: uid(), text: "Erste Karte – doppelklicken oder „Bearbeiten“" }] },
@@ -66,7 +83,7 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const p = JSON.parse(raw);
-      if (p && Array.isArray(p.columns)) return p;
+      if (isValidState(p)) return p;
     }
   } catch (e) { /* ignorieren */ }
   return defaultState();
@@ -209,10 +226,10 @@ document.getElementById("importFile").addEventListener("change", e => {
   reader.onload = () => {
     try {
       const data = JSON.parse(reader.result);
-      if (!data || !Array.isArray(data.columns)) throw new Error("Ungültiges Format");
+      if (!isValidState(data)) throw new Error("Ungültiges Format – erwartet wird ein Export dieses Boards ({ columns: […] })");
       state = data;
       save(); render();
-    } catch (err) { alert("Import fehlgeschlagen: " + err.message); }
+    } catch (err) { alert("Import fehlgeschlagen: " + err.message + "\nDas bestehende Board bleibt unverändert."); }
   };
   reader.readAsText(file);
   e.target.value = "";
