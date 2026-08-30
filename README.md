@@ -1,5 +1,7 @@
 # Kanban Board
 
+**Live-Demo:** https://grown661.github.io/kanban-board/
+
 Aufgaben verteilen sich schnell über Notizzettel und Chats – dieses Board hält sie als Karten in Spalten, verschiebbar per Drag & Drop, komplett lokal im Browser.
 
 ## Features
